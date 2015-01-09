@@ -3,8 +3,9 @@ package main
 import (
 	"os"
 
+	"github.com/Sirupsen/logrus"
 	"github.com/codegangsta/cli"
-	"github.com/sirupsen/logrus"
+	"github.com/shipyard/shipyard"
 )
 
 var (
@@ -28,7 +29,7 @@ func main() {
 	app := cli.NewApp()
 	app.Name = "shipyard"
 	app.Usage = "manage a shipyard cluster"
-	app.Version = "2.0.1"
+	app.Version = shipyard.VERSION
 	app.EnableBashCompletion = true
 	app.Flags = []cli.Flag{}
 	app.Commands = []cli.Command{
@@ -43,6 +44,7 @@ func main() {
 		stopCommand,
 		restartCommand,
 		scaleCommand,
+		logsCommand,
 		destroyCommand,
 		engineListCommand,
 		engineAddCommand,

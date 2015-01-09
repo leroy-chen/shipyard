@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Sirupsen/logrus"
 	"github.com/citadel/citadel"
 	"github.com/citadel/citadel/cluster"
 	"github.com/citadel/citadel/scheduler"
@@ -19,7 +21,6 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/shipyard/shipyard"
 	"github.com/shipyard/shipyard/dockerhub"
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -31,7 +32,9 @@ const (
 	tblNameExtensions  = "extensions"
 	tblNameWebhookKeys = "webhook_keys"
 	storeKey           = "shipyard"
-	TRACKER_HOST       = "http://tracker.shipyard-project.com"
+	trackerHost        = "http://tracker.shipyard-project.com"
+	EngineHealthUp     = "up"
+	EngineHealthDown   = "down"
 )
 
 var (
@@ -166,6 +169,8 @@ func (m *Manager) init() []*shipyard.Engine {
 	m.clusterManager = clusterManager
 	// start extension health check
 	go m.extensionHealthCheck()
+	// start engine check
+	go m.engineCheck()
 	// anonymous usage info
 	go m.usageReport()
 	return engines
@@ -197,11 +202,7 @@ func (m *Manager) uploadUsage() {
 			}
 		}
 	}
-	info, err := m.clusterManager.ClusterInfo()
-	if err != nil {
-		logger.Warnf("error getting cluster info for usage: %s", err)
-		return
-	}
+	info := m.clusterManager.ClusterInfo()
 	usage := &shipyard.Usage{
 		ID:              id,
 		Version:         m.version,
@@ -216,7 +217,7 @@ func (m *Manager) uploadUsage() {
 		logger.Warnf("error serializing usage info: %s", err)
 	}
 	buf := bytes.NewBuffer(b)
-	if _, err := http.Post(fmt.Sprintf("%s/update", TRACKER_HOST), "application/json", buf); err != nil {
+	if _, err := http.Post(fmt.Sprintf("%s/update", trackerHost), "application/json", buf); err != nil {
 		logger.Warnf("error sending usage info: %s", err)
 	}
 }
@@ -240,11 +241,7 @@ func (m *Manager) extensionHealthCheck() {
 }
 
 func (m *Manager) checkExtensionHealth(ext *shipyard.Extension) error {
-	containers, err := m.Containers(true)
-	if err != nil {
-		logger.Warnf("error running extension health check: %s", err)
-		return err
-	}
+	containers := m.Containers(true)
 	engs := m.Engines()
 	engines := []*citadel.Engine{}
 	for _, eng := range engs {
@@ -269,13 +266,49 @@ func (m *Manager) checkExtensionHealth(ext *shipyard.Extension) error {
 	return nil
 }
 
+func (m *Manager) engineCheck() {
+	t := time.NewTicker(time.Second * 10).C
+	for {
+		select {
+		case <-t:
+			engs := m.Engines()
+			for _, eng := range engs {
+				health := &shipyard.Health{}
+				start_time := time.Now()
+				stat, err := eng.Ping()
+				if err != nil {
+					logger.Warnf("unable to ping engine: %s", err)
+				}
+				if stat != 200 {
+					health.Status = EngineHealthDown
+				} else {
+					health.Status = EngineHealthUp
+					health.ResponseTime = int64(time.Since(start_time) / time.Nanosecond)
+				}
+				eng.Health = health
+				// get version
+				version, err := eng.Engine.Version()
+				if err != nil {
+					logger.Warnf("unable to detect docker version: %s", err)
+				}
+				ver := ""
+				if version != nil {
+					ver = version.Version
+				}
+				eng.DockerVersion = ver
+				m.SaveEngine(eng)
+			}
+		}
+	}
+}
+
 func (m *Manager) Engines() []*shipyard.Engine {
 	return m.engines
 }
 
 func (m *Manager) Engine(id string) *shipyard.Engine {
 	for _, e := range m.engines {
-		if e.Engine.ID == id {
+		if e.ID == id {
 			return e
 		}
 	}
@@ -283,6 +316,14 @@ func (m *Manager) Engine(id string) *shipyard.Engine {
 }
 
 func (m *Manager) AddEngine(engine *shipyard.Engine) error {
+	stat, err := engine.Ping()
+	if err != nil {
+		return err
+	}
+	if stat != 200 {
+		err := fmt.Errorf("Received status code '%d' when contacting %s", stat, engine.Engine.Addr)
+		return err
+	}
 	if _, err := r.Table(tblNameConfig).Insert(engine).RunWrite(m.session); err != nil {
 		return err
 	}
@@ -299,9 +340,16 @@ func (m *Manager) AddEngine(engine *shipyard.Engine) error {
 	return nil
 }
 
+func (m *Manager) SaveEngine(engine *shipyard.Engine) error {
+	if _, err := r.Table(tblNameConfig).Replace(engine).RunWrite(m.session); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (m *Manager) RemoveEngine(id string) error {
 	var engine *shipyard.Engine
-	res, err := r.Table(tblNameConfig).Get(id).Run(m.session)
+	res, err := r.Table(tblNameConfig).Filter(map[string]string{"id": id}).Run(m.session)
 	if err != nil {
 		return err
 	}
@@ -328,10 +376,7 @@ func (m *Manager) RemoveEngine(id string) error {
 }
 
 func (m *Manager) Container(id string) (*citadel.Container, error) {
-	containers, err := m.clusterManager.ListContainers(true)
-	if err != nil {
-		return nil, err
-	}
+	containers := m.clusterManager.ListContainers(true, false, "")
 	for _, cnt := range containers {
 		if strings.HasPrefix(cnt.ID, id) {
 			return cnt, nil
@@ -340,15 +385,20 @@ func (m *Manager) Container(id string) (*citadel.Container, error) {
 	return nil, nil
 }
 
-func (m *Manager) Containers(all bool) ([]*citadel.Container, error) {
-	return m.clusterManager.ListContainers(all)
-}
-
-func (m *Manager) ContainersByImage(name string, all bool) ([]*citadel.Container, error) {
-	allContainers, err := m.Containers(all)
+func (m *Manager) Logs(container *citadel.Container, stdout bool, stderr bool) (io.ReadCloser, error) {
+	data, err := m.clusterManager.Logs(container, stdout, stderr)
 	if err != nil {
 		return nil, err
 	}
+	return data, nil
+}
+
+func (m *Manager) Containers(all bool) []*citadel.Container {
+	return m.clusterManager.ListContainers(all, false, "")
+}
+
+func (m *Manager) ContainersByImage(name string, all bool) ([]*citadel.Container, error) {
+	allContainers := m.Containers(all)
 	imageContainers := []*citadel.Container{}
 	for _, c := range allContainers {
 		if strings.Index(c.Image.Name, name) > -1 {
@@ -374,8 +424,8 @@ func (m *Manager) IdenticalContainers(container *citadel.Container, all bool) ([
 	return containers, nil
 }
 
-func (m *Manager) ClusterInfo() (*shipyard.ClusterInfo, error) {
-	info, err := m.clusterManager.ClusterInfo()
+func (m *Manager) ClusterInfo() *shipyard.ClusterInfo {
+	info := m.clusterManager.ClusterInfo()
 	clusterInfo := &shipyard.ClusterInfo{
 		Cpus:           info.Cpus,
 		Memory:         info.Memory,
@@ -386,10 +436,7 @@ func (m *Manager) ClusterInfo() (*shipyard.ClusterInfo, error) {
 		ReservedMemory: info.ReservedMemory,
 		Version:        m.version,
 	}
-	if err != nil {
-		return nil, err
-	}
-	return clusterInfo, nil
+	return clusterInfo
 }
 
 func (m *Manager) Destroy(container *citadel.Container) error {
@@ -810,6 +857,7 @@ func (m *Manager) RegisterExtension(ext *shipyard.Extension) error {
 		Cpus:          ext.Config.Cpus,
 		Memory:        ext.Config.Memory,
 		Environment:   ext.Config.Environment,
+		Links:         ext.Config.Links,
 		Args:          ext.Config.Args,
 		Volumes:       ext.Config.Volumes,
 		BindPorts:     ext.Config.Ports,
@@ -820,10 +868,7 @@ func (m *Manager) RegisterExtension(ext *shipyard.Extension) error {
 	if ext.Config.DeployPerEngine {
 		engs := m.clusterManager.Engines()
 		extEngines := []*citadel.Engine{}
-		containers, err := m.Containers(true)
-		if err != nil {
-			return err
-		}
+		containers := m.Containers(true)
 		for _, c := range containers {
 			if v, ok := c.Image.Environment["_SHIPYARD_EXTENSION"]; ok {
 				if v == ext.ID {
@@ -862,10 +907,7 @@ func (m *Manager) RegisterExtension(ext *shipyard.Extension) error {
 
 func (m *Manager) UnregisterExtension(ext *shipyard.Extension) error {
 	// remove containers that are linked to extension
-	containers, err := m.clusterManager.ListContainers(true)
-	if err != nil {
-		return err
-	}
+	containers := m.clusterManager.ListContainers(true, false, "")
 	for _, c := range containers {
 		// check if has the extension env var
 		if val, ok := c.Image.Environment["_SHIPYARD_EXTENSION"]; ok {
@@ -905,10 +947,7 @@ func (m *Manager) DeleteExtension(id string) error {
 
 func (m *Manager) RedeployContainers(image string) error {
 	var img *citadel.Image
-	containers, err := m.Containers(false)
-	if err != nil {
-		return err
-	}
+	containers := m.Containers(false)
 	deployed := false
 	for _, c := range containers {
 		if strings.Index(c.Image.Name, image) > -1 {
@@ -1079,7 +1118,9 @@ func (m *Manager) Scale(container *citadel.Container, count int) error {
 		}
 		// reset hostname
 		img.Hostname = ""
-		m.Run(img, numAdd, false)
+		if _, err := m.Run(img, numAdd, false); err != nil {
+			return err
+		}
 	} else { // none
 		logger.Info("no need to scale")
 	}

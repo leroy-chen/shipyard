@@ -1,34 +1,5 @@
 'use strict';
 
-angular.module('shipyard.utils', ['ngCookies'])
-    .factory('AuthToken', function($cookieStore) {
-        return {
-            'get': function() {
-                return $cookieStore.get('auth_token');
-            },
-            'getUsername': function() {
-                return $cookieStore.get('auth_username');
-            },
-            'save': function(username, token) {
-                var token = username + ":" + token;
-                $cookieStore.put('auth_username', username);
-                $cookieStore.put('auth_token', token);
-            },
-            'delete': function() {
-                $cookieStore.remove('auth_username');
-                $cookieStore.remove('auth_token');
-            },
-            'isLoggedIn': function() {
-                var loggedIn = false;
-                var token = $cookieStore.get('auth_token');
-                if (token != undefined) {
-                    loggedIn = true;
-                }
-                return loggedIn;
-            }
-        }
-    });
-
 function setActiveMenuItem(name) {
     $("div#menu-main a.item").removeClass("active");
     $("div#menu-main a#"+name).addClass("active");
@@ -98,4 +69,44 @@ function getRandomColor() {
     var colors = d3.scale.category20c().range();
     var rand = colors[Math.floor(Math.random() * colors.length)];
     return rand
+}
+
+function addPortDefinition() {
+    $(".ui.ports.default-label").remove();
+    var idx = $(".ui.segment.ports").children("div").length;
+    $(".ui.segment.ports").append(' \
+                <div class="four fields"> \
+                    <div class="field"> \
+                        <label>Protocol</label> \
+                        <div class="ui dropdown selection"> \
+                            <input id="protocol' + idx + '"type="hidden" name="protocol" class="ui input notEmpty"> \
+                            <div class="default text">...</div> \
+                                <i class="dropdown icon"></i> \
+                                <div class="menu"> \
+                                    <div class="item" data-value="tcp">TCP</div> \
+                                <div class="item" data-value="udp">UDP</div> \
+                            </div> \
+                        </div> \
+                    </div> \
+                    <div class="field"> \
+                        <label>IP</label> \
+                        <div class="ui left labeled input"> \
+                            <input type="text" placeholder="0.0.0.0"> \
+                        </div> \
+                    </div> \
+                    <div class="field"> \
+                        <label>Port</label> \
+                        <div class="ui left labeled input"> \
+                            <input type="text" placeholder=""> \
+                        </div> \
+                    </div> \
+                    <div class="field"> \
+                        <label>Container Port</label> \
+                        <div class="ui left labeled input"> \
+                            <input id="container_port' + idx + '" type="text" placeholder="" name="container_port" class="ui input notEmpty"> \
+                        </div> \
+                    </div> \
+                </div>');
+    $(".ui.dropdown").dropdown();
+    setValidationRules();
 }

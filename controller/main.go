@@ -9,8 +9,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Sirupsen/logrus"
 	"github.com/citadel/citadel"
 	"github.com/codegangsta/negroni"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/gorilla/context"
 	"github.com/gorilla/mux"
 	"github.com/shipyard/shipyard"
@@ -18,7 +20,6 @@ import (
 	"github.com/shipyard/shipyard/controller/middleware/access"
 	"github.com/shipyard/shipyard/controller/middleware/auth"
 	"github.com/shipyard/shipyard/dockerhub"
-	"github.com/sirupsen/logrus"
 )
 
 var (
@@ -34,7 +35,7 @@ var (
 
 const (
 	STORE_KEY = "shipyard"
-	VERSION   = "2.0.3"
+	VERSION   = shipyard.VERSION
 )
 
 type (
@@ -137,6 +138,25 @@ func stopContainer(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func containerLogs(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+	container, err := controllerManager.Container(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	data, err := controllerManager.ClusterManager().Logs(container, true, true)
+	if err != nil {
+		logger.Errorf("error getting logs for %s: %s", container.ID, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	stdcopy.StdCopy(w, w, data)
+}
+
 func restartContainer(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
@@ -212,11 +232,7 @@ func inspectEngine(w http.ResponseWriter, r *http.Request) {
 func containers(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("content-type", "application/json")
 
-	containers, err := controllerManager.ClusterManager().ListContainers(true)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	containers := controllerManager.Containers(true)
 	if err := json.NewEncoder(w).Encode(containers); err != nil {
 		logger.Error(err)
 	}
@@ -243,6 +259,11 @@ func addEngine(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	health := &shipyard.Health{
+		Status:       "pending",
+		ResponseTime: 0,
+	}
+	engine.Health = health
 	if err := controllerManager.AddEngine(engine); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -266,11 +287,7 @@ func removeEngine(w http.ResponseWriter, r *http.Request) {
 func clusterInfo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("content-type", "application/json")
 
-	info, err := controllerManager.ClusterInfo()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	info := controllerManager.ClusterInfo()
 	if err := json.NewEncoder(w).Encode(info); err != nil {
 		logger.Error(err)
 	}
@@ -707,6 +724,7 @@ func main() {
 	apiRouter.HandleFunc("/api/containers/{id}/stop", stopContainer).Methods("GET")
 	apiRouter.HandleFunc("/api/containers/{id}/restart", restartContainer).Methods("GET")
 	apiRouter.HandleFunc("/api/containers/{id}/scale", scaleContainer).Methods("GET")
+	apiRouter.HandleFunc("/api/containers/{id}/logs", containerLogs).Methods("GET")
 	apiRouter.HandleFunc("/api/events", events).Methods("GET")
 	apiRouter.HandleFunc("/api/events", purgeEvents).Methods("DELETE")
 	apiRouter.HandleFunc("/api/engines", engines).Methods("GET")

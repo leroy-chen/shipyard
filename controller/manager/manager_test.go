@@ -23,10 +23,14 @@ func newManager() *Manager {
 		fmt.Println("env vars needed: RETHINKDB_TEST_PORT_28015_TCP_ADDR, RETHINKDB_TEST_PORT_28015_TCP_PORT, RETHINKDB_TEST_DATABASE, DOCKER_TEST_ADDR")
 		os.Exit(1)
 	}
-	m, err := NewManager(rethinkdbAddr, rDb, "")
+	m, err := NewManager(rethinkdbAddr, rDb, "", "test", true)
 	if err != nil {
 		fmt.Printf("unable to connect to test db: %s\n", err)
 		os.Exit(1)
+	}
+	health := &shipyard.Health{
+		Status:       "up",
+		ResponseTime: 1,
 	}
 	eng := &shipyard.Engine{
 		ID: "test",
@@ -37,6 +41,7 @@ func newManager() *Manager {
 			Memory: 4096,
 			Labels: []string{"tests"},
 		},
+		Health: health,
 	}
 	m.AddEngine(eng)
 	return m
@@ -46,8 +51,9 @@ func getTestImage() *citadel.Image {
 	img := &citadel.Image{
 		Name:   "busybox",
 		Cpus:   0.1,
-		Memory: 16,
+		Memory: 8,
 		Type:   "service",
+		Labels: []string{"tests"},
 	}
 	return img
 }

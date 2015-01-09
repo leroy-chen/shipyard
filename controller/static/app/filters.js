@@ -15,6 +15,14 @@ angular.module('shipyard.filters', [])
             return truncate(t);
         };
     })
+    .filter('container_name', function () {
+        return function (t) {
+            if (t == undefined) {
+                return "";
+            }
+            return t.slice(1);
+        };
+    })
     .filter('parseUrl', function () {
         return function (u) {
             if (u == undefined) {
@@ -35,6 +43,11 @@ angular.module('shipyard.filters', [])
                 return "";
             }
             return s + " MB";
+        };
+    })
+    .filter('unsafe', function ($sce) {
+        return function(val) {
+            return $sce.trustAsHtml(val);  
         };
     })
     .filter('formatEvent', function () {
