@@ -1,4 +1,4 @@
-# Shipyard [![Build Status](http://ci.evanhazlett.com/api/badge/github.com/shipyard/shipyard/status.svg?branch=master)](http://ci.evanhazlett.com/github.com/shipyard/shipyard)
+# Shipyard
 
 Composable Docker Management
 
@@ -7,6 +7,14 @@ Shipyard enables multi-host, Docker cluster management.  It uses the [Citadel](h
 
 # Quick Start
 
+## Shipyard Deploy
+Shipyard Deploy will automatically start a Shipyard stack on a desired Docker Engine.
+
+```
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock shipyard/deploy start
+```
+
+## Manual
 * Start a data volume instance of RethinkDB:
 ```
 docker run -it -d --name shipyard-rethinkdb-data \
@@ -15,7 +23,7 @@ docker run -it -d --name shipyard-rethinkdb-data \
 
 * Start RethinkDB with using the data volume container:
 ```
-docker run -it -P -d --name shipyard-rethinkdb \
+docker run -it -d --name shipyard-rethinkdb \
   --volumes-from shipyard-rethinkdb-data shipyard/rethinkdb
 ```
 

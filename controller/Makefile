@@ -1,3 +1,8 @@
+CGO_ENABLED=0
+GOOS=linux
+GOARCH=amd64
+TAG=${TAG:-latest}
+
 all: deps build
 
 deps:
@@ -5,30 +10,21 @@ deps:
 
 clean:
 	@rm -rf Godeps/_workspace controller
+
 build:
-	@godep go build .
+	@godep go build -a -tags 'netgo' -ldflags '-w -linkmode external -extldflags -static' .
 
 media:
-	@cd static && bower install
+	@cd static && bower -s install --allow-root -p | xargs echo
 
-release: deps build
-	docker build -t shipyard/shipyard:$(VERSION) .
-	docker push shipyard/shipyard:$(VERSION)
+image: media build
+	@echo Building Shipyard image $(TAG)
+	@docker build -t shipyard/shipyard:$(TAG) .
+
+release: deps build image
+	@docker push shipyard/shipyard:$(TAG)
 
 test: clean 
-	@# set the GOPATH because godep on drone does not 
-	@# have the env vars injected from drone
-	@# fuck computers
-	@godep restore
-	@export GOPATH=$GOPATH:$(pwd)/Godeps/_workspace
-	@go test -v ./...
+	@godep go test -v ./...
 
-test-drone: clean 
-	@# set the GOPATH because godep on drone does not 
-	@# have the env vars injected from drone
-	@# fuck computers
-	@/var/cache/drone/bin/godep restore
-	@export GOPATH=$GOPATH:$(pwd)/Godeps/_workspace
-	@go test -v ./...
-
-.PHONY: all deps build clean test test-drone release
+.PHONY: all deps build clean media image test release
